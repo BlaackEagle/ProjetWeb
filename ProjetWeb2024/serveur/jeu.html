@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8" />
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
+    <script src="https://d3js.org/d3.v5.min.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        var socket = io();
+        var nbMaxJoueurs = 2;
+        var joueurs = [];  
+        var nomsJoueurs = {};  
+        var numJoueur = 0;
+        var jetonJoueur = -1;
+        var modeSpectateur = false; 
+        var historiqueIndex = 0;  
+
+        function entrerPartie() {
+            var nomJoueur = document.getElementById("nomJoueur").value.trim();
+            if (nomJoueur && !joueurs.includes(nomJoueur)) {
+                socket.emit('entree', nomJoueur);
+            } else {
+                alert("Nom déjà pris ou invalide.");
+            }
+        }
+        socket.on('modeSpectateur', (data) => {
+            modeSpectateur = true;
+            document.getElementById("spectatorControls").style.display = "block"; // Affiche les boutons spectateur
+            document.getElementById("nomJoueur").style.display = "none"; 
+            document.querySelectorAll('.hexagoneDamier').forEach(hex => hex.style.pointerEvents = 'none'); // Désactive les clics
+        });
+
+        // Navigation historique tours
+        socket.on('etatHistorique', (etat) => {
+            let hexagones = document.querySelectorAll('.hexagoneDamier');
+            hexagones.forEach(hex => hex.setAttribute("fill", "grey")); 
+            etat.forEach(coup => {
+                let hex = document.querySelector(`#hex-${coup.numHexagone}`);
+                let couleur = coup.numJoueur === 0 ? 'blue' : 'red';
+                hex.setAttribute("fill", couleur);
+            });
+        });
+
+        function naviguerHistorique(direction) {
+            socket.emit('naviguerHistorique', direction);
+        }
+
+        function quitterLaPartie() {
+            let nom = document.getElementById("nomJoueur").value.trim();
+            if (nom) socket.emit('sortie', nom);
+        }
+
+        function envoiMessage(input) {
+            socket.emit("message", { 'numJoueur': numJoueur, 'texte': input.value });
+            input.value = '';
+            input.focus();
+        }
+
+        function showNotification(message, type) {
+            var notificationsContainer = document.getElementById("notifications");
+
+            // Créer un nouvel élément de notification
+            var notification = document.createElement("div");
+            notification.classList.add("notification");
+
+            // Définir le type de la notification 
+            switch(type) {
+                case 'success':
+                    notification.classList.add("success");
+                    break;
+                case 'error':
+                    notification.classList.add("error");
+                    break;
+                case 'info':
+                    notification.classList.add("info");
+                    break;
+                default:
+                    notification.classList.add("info");
+            }
+
+            notification.innerText = message;
+
+            notificationsContainer.appendChild(notification);
+
+            let delay = 1500;   
+            if (type === 'success') {
+                delay = 2500; 
+            }
+            // Ajuster le délai pour "Ce n'est pas ton tour"
+            if (type === 'error') {
+                setTimeout(() => {
+                    notification.style.opacity = 0;
+                    setTimeout(() => {
+                        notificationsContainer.removeChild(notification);
+                    }, 1000); 
+                }, 1000);  
+                return; 
+            }
+            setTimeout(() => {
+                notification.style.opacity = 0;
+                setTimeout(() => {
+                    notificationsContainer.removeChild(notification);
+                }, 1000); 
+            }, delay); 
+        }
+
+
+        socket.on('majliste', liste => {
+            joueurs = liste;
+            // Mettre à jour les noms des joueurs
+            joueurs.forEach((joueur, index) => {
+                nomsJoueurs[index] = joueur;  // Associe le numéro du joueur à son nom
+            });
+            document.getElementById('listeJoueurs').textContent = joueurs.join(', ');
+        });
+        socket.on('numJ', num => {
+            numJoueur = num;
+        });
+        socket.on('message', message => {
+            const messagesArea = document.getElementById('messages');
+            if (message) {
+                messagesArea.value += `\n${message}`;
+                messagesArea.scrollTop = messagesArea.scrollHeight;
+            } else {
+                console.error('Erreur de message:', message);
+            }
+        });
+        socket.on('messageServeur', (message) => {
+            const messageServeur = document.getElementById('messageServeur');
+            if (messageServeur) {
+                messageServeur.textContent = message;
+            }
+        });
+        // Mise à jour du jeton (tour du joueur)
+        socket.on('changementJeton', (data) => {
+            jetonJoueur = data.jeton;
+            if (jetonJoueur === numJoueur) {
+                console.log("C'est ton tour !");
+                showNotification("C'est ton tour !", "success");
+                enableHexagoneClick(true);
+            } else {
+                console.log("Ce n'est pas ton tour.");
+                showNotification("Ce n'est pas ton tour.", "error");
+                enableHexagoneClick(false);
+            }
+        });
+
+        socket.on('colorierHexagone', data => {
+            let hexagone = document.querySelector(`#hex-${data.numHexagone}`);
+            let couleur = data.numJoueur === 0 ? 'blue' : 'red';
+            hexagone.setAttribute("fill", couleur);
+        });
+
+        function enableHexagoneClick(enable) {
+            let hexagones = document.querySelectorAll('.hexagoneDamier');
+            hexagones.forEach(hex => {
+                if (enable) {
+                    hex.addEventListener('click', handleHexClick);
+                } else {
+                    hex.removeEventListener('click', handleHexClick);
+                }
+            });
+        }
+        function handleHexClick(event) {
+            if (numJoueur === jetonJoueur) {
+                let idHexagone = event.target.id;
+                let numHexagone = parseInt(idHexagone.split("-")[1]);
+                let hexagone = event.target;
+
+                // Vérifier si l'hexagone est déjà colorié
+                if (hexagone.getAttribute('fill') !== 'grey') {
+                    showNotification("Cet hexagone est déjà colorié !", "error");
+                    return; 
+                }
+
+                socket.emit('selectionHexagone', { numJoueur, numHexagone });
+            } else {
+                showNotification("Ce n'est pas ton tour !", "error");
+            }
+        }
+
+        function creerDamier() {
+            let rayon = 30;
+            let nbLignes = 11, nbColonnes = 11;
+            let largeur = 2 * rayon;
+            let hauteur = Math.sqrt(3) * rayon;
+
+            let svg = d3.select("#Tablier")
+                .append("svg")
+                .attr("id", "svgTablier")
+                .attr("width", nbColonnes * 1.5 * rayon + rayon)
+                .attr("height", nbLignes * hauteur + rayon);
+
+            let hexagone = creePointsHexagone(rayon);
+            for (let ligne = 0; ligne < nbLignes; ligne++) {
+                for (let colonne = 0; colonne < nbColonnes; colonne++) {
+                    let x = colonne * 1.5 * rayon;
+                    let y = ligne * hauteur;
+                    if (colonne % 2 === 1) {
+                        y += hauteur / 2;
+                    }
+
+                    let path = "M" + hexagone.map(p => (p[0] + x) + "," + (p[1] + y)).join("L") + "Z";
+                    svg.append("path")
+                        .attr("d", path)
+                        .attr("stroke", "black")
+                        .attr("fill", "grey")
+                        .attr("class", "hexagoneDamier")
+                        .attr("id", `hex-${ligne * nbColonnes + colonne}`);
+                }
+            }
+        }
+
+        function creePointsHexagone(rayon) {
+            let points = [];
+            for (let i = 0; i < 6; i++) {
+                let angle = Math.PI / 3 * i; 
+                points.push([Math.cos(angle) * rayon, Math.sin(angle) * rayon]);
+            }
+            return points;
+        }
+
+        window.addEventListener('load', () => {
+            document.querySelector("#Tablier").style.display = "block"; 
+            creerDamier();  // Créer le damier 
+        });
+    </script>
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            background-color: #bad1d8;  
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        
+        #Tablier {
+            border: 2px solid #93c9da;  
+            border-radius: 10px;
+            background-color: #d5e8f8; 
+            padding: 20px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }
+        
+        #rej {
+            text-align: center;
+            margin: 20px;
+            color: #081449;
+        }
+        
+        #messages {
+            width: 100%;
+            margin: 20px auto;
+            height: 250px;
+            padding: 10px;
+            border-radius: 8px;
+            background-color: #86c1cf;
+            border: 1px solid #381aa5;
+            resize: none;
+            font-size: 18px;
+            font-family: 'Courier New', Courier, monospace;
+            color: #0a0822;
+        }
+        
+        button {
+            background-color: #c8ffd4;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 5px;
+            font-size: 14px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        
+        button:hover {
+            background-color: #589b74;  
+        }
+        
+        .notification {
+            background-color: #00796b;
+            color: white;
+            padding: 10px 20px;
+            margin-bottom: 10px;
+            border-radius: 5px;
+            font-size: 16px;
+            opacity: 1;
+            transition: opacity 0.5s ease-out;
+            display: inline-block;
+            max-width: 300px;
+            text-align: center;
+            
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 1000;  
+        }
+
+        .notification.success {
+            background-color: #4caf50;  
+        }
+
+        .notification.error {
+            background-color: #f44336;  
+        }
+
+        .notification.info {
+            background-color: #ff9800;
+        }
+
+        #spectatorControls {
+            display: flex;
+            justify-content: center;
+            margin-top: 20px;
+        }
+
+        #spectatorControls button {
+            background-color: #8ec2f0;
+        }
+
+        #spectatorControls button:hover {
+            background-color: #427399;
+        }
+
+
+    </style>
+</head>
+<body>
+    <div id="rej">
+        <h1 style="text-align: center;">Jeu de Hex</h1>
+        <h2>Joueurs : <label id="listeJoueurs"></label></h2>
+        <div>
+            <input type="text" id="nomJoueur" placeholder="Nom du joueur" />
+            <button onclick="entrerPartie()">Rejoindre la partie</button>
+            <button onclick="quitterLaPartie()">Quitter</button>
+        </div>
+        <div id="messageServeur"></div>
+
+        <!-- Messagerie -->
+        <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+            <div id="Tablier" style="flex: 1; max-width: 60%;"></div>
+            <div style="flex: 1; max-width: 30%; margin-left: 20px;">
+                <textarea id="messages" rows="15" cols="30" style="width: 100%;"></textarea>
+                <input id="message" type="text" onkeydown="if(event.key === 'Enter'){envoiMessage(this)}" style="width: 100%;" />
+            </div>  
+        </div>
+    
+        <!-- Spectateurs -->
+        <div id="spectatorControls" style="display: none; margin-top: 20px; text-align: center;">
+            <button onclick="naviguerHistorique('back')">Revenir en arrière</button>
+            <button onclick="naviguerHistorique('forward')">Repartir en avant</button>
+        </div>
+    </div>
+    <div id="notifications"></div>
+    
+</body>
+</html>
